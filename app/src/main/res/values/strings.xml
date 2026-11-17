@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Thor Corners</string>
+    <string name="service_label">Thor Corners</string>
+    <string name="service_description">Draws true-black rounded corners on both of the Thor\'s screens. It uses accessibility only so the corners sit above the status bar and never block your touches. It does not read anything on your screen.</string>
+</resources>

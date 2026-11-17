@@ -1,0 +1,21 @@
+# Gradle / Android build output
+.gradle/
+build/
+app/build/
+.kotlin/
+
+# Machine-specific: points at your local Android SDK
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+captures/
+
+# Built APKs belong in GitHub Releases, not the repo
+*.apk
+*.aab
+
+# Signing keys
+*.jks
+*.keystore
