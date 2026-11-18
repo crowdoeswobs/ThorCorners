@@ -7,14 +7,13 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
-import android.view.Gravity
 import android.view.View
 
-enum class Corner(val gravity: Int) {
-    TOP_LEFT(Gravity.TOP or Gravity.LEFT),
-    TOP_RIGHT(Gravity.TOP or Gravity.RIGHT),
-    BOTTOM_LEFT(Gravity.BOTTOM or Gravity.LEFT),
-    BOTTOM_RIGHT(Gravity.BOTTOM or Gravity.RIGHT),
+enum class Corner(val isRight: Boolean, val isBottom: Boolean) {
+    TOP_LEFT(isRight = false, isBottom = false),
+    TOP_RIGHT(isRight = true, isBottom = false),
+    BOTTOM_LEFT(isRight = false, isBottom = true),
+    BOTTOM_RIGHT(isRight = true, isBottom = true),
 }
 
 /**

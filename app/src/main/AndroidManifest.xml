@@ -2,6 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Check for updates: only used when the user taps the button, to reach GitHub. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Check for updates: install the downloaded update (Android still asks the user to confirm). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- Per-app rules: see which app is open. Granted by the user in Settings > Usage access. -->
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"
@@ -35,6 +40,11 @@
             android:name=".AppRulesActivity"
             android:exported="false"
             android:label="Per-app rules" />
+
+        <!-- Result of installing a downloaded update. -->
+        <receiver
+            android:name=".UpdateResultReceiver"
+            android:exported="false" />
 
         <!-- Draws the corners. Accessibility services restart on boot and after updates on their own. -->
         <service

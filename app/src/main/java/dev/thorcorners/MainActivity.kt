@@ -48,7 +48,11 @@ class MainActivity : Activity() {
 
     private fun build() {
         root.removeAllViews()
-        root.addView(text("Thor Corners", 26f))
+        root.addView(text("Thor Corners", 26f).apply { setPadding(0, dp(6), 0, 0) })
+        root.addView(text("v${appVersion()}", 13f).apply {
+            alpha = 0.5f
+            setPadding(0, 0, 0, dp(6))
+        })
 
         if (!CornerService.isEnabled(this)) {
             root.addView(text(
@@ -74,7 +78,19 @@ class MainActivity : Activity() {
         for (display in displays) addDisplaySection(display)
 
         addGeneralSection()
+        addUpdateButton()
         addResetButton()
+    }
+
+    private fun appVersion(): String =
+        runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "?"
+
+    /** Checks GitHub for a newer release and, if there is one, downloads and installs it. */
+    private fun addUpdateButton() {
+        root.addView(Button(this).apply {
+            text = "Check for updates (you have v${appVersion()})"
+            setOnClickListener { Updater(this@MainActivity).check() }
+        })
     }
 
     /**

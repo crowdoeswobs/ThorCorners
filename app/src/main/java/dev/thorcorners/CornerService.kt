@@ -2,11 +2,13 @@ package dev.thorcorners
 
 import android.accessibilityservice.AccessibilityService
 import android.content.BroadcastReceiver
+import android.content.ComponentCallbacks
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
+import android.content.res.Configuration
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.os.BatteryManager
@@ -15,6 +17,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.view.Display
+import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
@@ -76,7 +79,12 @@ class CornerService : AccessibilityService() {
                         refreshAll()
                     }
                 }
-                Intent.ACTION_SCREEN_OFF -> { screenOn = false; updateAppWatcher() }
+                Intent.ACTION_SCREEN_OFF -> {
+                    screenOn = false
+                    updateAppWatcher()
+                    // Get back on top of any overlay another app added since (invisible while off).
+                    overlays.values.forEach { it.restack() }
+                }
                 Intent.ACTION_SCREEN_ON -> { screenOn = true; updateAppWatcher() }
             }
         }
@@ -182,50 +190,125 @@ class CornerService : AccessibilityService() {
             Log.e(TAG, "Could not add overlay on display $displayId (${display.name})", e)
             return
         }
-        overlay.setRadiusDp(radiusDp)
+        overlay.setRadiusDp(radiusDp) // also re-checks rotation / size / density
     }
 
     private fun removeOverlay(displayId: Int) {
         overlays.remove(displayId)?.remove()
     }
 
-    /** The four corner windows on one display. */
-    private class DisplayOverlay(service: AccessibilityService, display: Display, radiusDp: Int) {
+    /**
+     * The four corner windows on one display.
+     *
+     * Every corner is placed at an absolute x/y measured from the top-left of the *full* screen
+     * (the window context's maximum bounds), instead of using BOTTOM/RIGHT gravity. Gravity
+     * anchors to the bottom of the window's layout area, and on some setups (a visible
+     * 3-button nav bar, the large-screen taskbar, OEM firmware) that area can stop short of the
+     * real bottom edge, which pushes the bottom corners up off the real screen corners.
+     *
+     * The layout is recomputed whenever the screen rotates, resizes or changes density.
+     */
+    private class DisplayOverlay(service: AccessibilityService, private val display: Display, radiusDp: Int) {
         private val context: Context =
             service.createWindowContext(display, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY, null)
         private val windowManager = context.getSystemService(WindowManager::class.java)
-        private val density = context.resources.displayMetrics.density
         private val views = Corner.entries.associateWith { CornerView(context, it) }
-        private var radiusPx = (radiusDp * density).roundToInt()
+        private var radiusDp = radiusDp
+        private var lastGeometry = ""
+
+        // Window contexts get their own config changes (rotation, display size, density).
+        private val configCallbacks = object : ComponentCallbacks {
+            override fun onConfigurationChanged(newConfig: Configuration) = layout()
+            @Deprecated("Deprecated in Java")
+            override fun onLowMemory() = Unit
+        }
 
         init {
+            val start = geometry()
             views.forEach { (corner, view) ->
-                view.visibility = if (radiusPx > 0) View.VISIBLE else View.GONE
-                windowManager.addView(view, layoutParams(corner, radiusPx, display.displayId))
+                windowManager.addView(view, layoutParams(corner, start))
             }
-            Log.i(TAG, "Corners added on display ${display.displayId} (${display.name})")
+            lastGeometry = start.key
+            applyVisibility(start.size)
+            context.registerComponentCallbacks(configCallbacks)
+            Log.i(TAG, "Corners added on display ${display.displayId} (${display.name}) ${start.key}")
+            verifySoon()
         }
 
         fun setRadiusDp(dp: Int) {
-            val px = (dp * density).roundToInt()
-            if (px == radiusPx) return
-            radiusPx = px
-            views.forEach { (_, view) ->
-                val lp = view.layoutParams as WindowManager.LayoutParams
-                lp.width = px
-                lp.height = px
-                windowManager.updateViewLayout(view, lp)
-                view.visibility = if (px > 0) View.VISIBLE else View.GONE
+            radiusDp = dp
+            layout()
+        }
+
+        /** Called on any display change; cheap when nothing that matters has changed. */
+        fun layout() {
+            val g = geometry()
+            if (g.key == lastGeometry) return
+            lastGeometry = g.key
+            views.forEach { (corner, view) ->
+                runCatching { windowManager.updateViewLayout(view, layoutParams(corner, g)) }
+                    .onFailure { Log.w(TAG, "relayout failed on display ${display.displayId}", it) }
             }
+            applyVisibility(g.size)
+            Log.i(TAG, "Corners re-laid out on display ${display.displayId}: ${g.key}")
+            verifySoon()
+        }
+
+        /**
+         * Remove and re-add the windows so they're drawn above any accessibility overlay another
+         * app added after us (the newest overlay wins). Done while the screen is off, so it's invisible.
+         */
+        fun restack() {
+            val g = geometry()
+            views.forEach { (corner, view) ->
+                runCatching {
+                    windowManager.removeViewImmediate(view)
+                    windowManager.addView(view, layoutParams(corner, g))
+                }.onFailure { Log.w(TAG, "restack failed on display ${display.displayId}", it) }
+            }
+            lastGeometry = g.key
+            applyVisibility(g.size)
         }
 
         fun remove() {
+            runCatching { context.unregisterComponentCallbacks(configCallbacks) }
             views.values.forEach { runCatching { windowManager.removeViewImmediate(it) } }
         }
 
-        private fun layoutParams(corner: Corner, size: Int, displayId: Int) =
+        private class Geometry(val width: Int, val height: Int, val size: Int) {
+            val key = "${width}x$height r=$size"
+        }
+
+        /** Full screen size in the current rotation, and the corner size for the current density. */
+        private fun geometry(): Geometry {
+            val bounds = windowManager.maximumWindowMetrics.bounds
+            val density = context.resources.displayMetrics.density
+            return Geometry(bounds.width(), bounds.height(), (radiusDp * density).roundToInt())
+        }
+
+        private fun applyVisibility(size: Int) {
+            val v = if (size > 0) View.VISIBLE else View.GONE
+            views.values.forEach { it.visibility = v }
+        }
+
+        /** Log (for bug reports) if Android placed a corner somewhere other than where we asked. */
+        private fun verifySoon() {
+            views.forEach { (corner, view) ->
+                view.postDelayed({
+                    if (!view.isAttachedToWindow) return@postDelayed
+                    val lp = view.layoutParams as WindowManager.LayoutParams
+                    val at = IntArray(2).also(view::getLocationOnScreen)
+                    if (at[0] != lp.x || at[1] != lp.y) {
+                        Log.w(TAG, "Display ${display.displayId} $corner is at ${at[0]},${at[1]} " +
+                            "but should be at ${lp.x},${lp.y} ($lastGeometry)")
+                    }
+                }, 500)
+            }
+        }
+
+        private fun layoutParams(corner: Corner, g: Geometry) =
             WindowManager.LayoutParams(
-                size, size,
+                g.size, g.size,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 // NOT_TOUCHABLE: touches go to whatever is underneath, never to us.
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
@@ -235,10 +318,15 @@ class CornerService : AccessibilityService() {
                     WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
                 PixelFormat.TRANSLUCENT,
             ).apply {
-                gravity = corner.gravity
+                // Absolute position from the top-left of the full screen (see class comment).
+                gravity = Gravity.TOP or Gravity.LEFT
+                x = if (corner.isRight) g.width - g.size else 0
+                y = if (corner.isBottom) g.height - g.size else 0
                 layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
                 fitInsetsTypes = 0
-                title = "ThorCorners-d$displayId-$corner"
+                fitInsetsSides = 0
+                isFitInsetsIgnoringVisibility = true
+                title = "ThorCorners-d${display.displayId}-$corner"
             }
     }
 
